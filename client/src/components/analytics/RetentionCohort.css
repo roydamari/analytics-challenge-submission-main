@@ -1,0 +1,16 @@
+.retention-cohort {
+  /* display:flex; */
+  /* flex-direction: column; */
+  height: 100%;
+  width: fit-content;
+  overflow-y: auto;
+  padding: 10px;
+}
+.retention-cohort .table-container {
+}
+.retention-cohort table {
+}
+.retention-week {
+}
+.weekDataBlock {
+}

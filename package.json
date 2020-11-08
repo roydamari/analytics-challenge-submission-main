@@ -1,0 +1,24 @@
+{
+  "name": "analytics-challenge-boilerplate",
+  "version": "1.0.0",
+  "description": "You will build analytics system that would present usage analytics about a website by collecting events sent to the platform.",
+  "main": "index.js",
+  "scripts": {
+    "init": "cd server && npm i && cd .. && cd client && npm i",
+    "test": "cd server && npm run test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/suvelocity/analytics-challenge-boilerplate.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/suvelocity/analytics-challenge-boilerplate/issues"
+  },
+  "homepage": "https://github.com/suvelocity/analytics-challenge-boilerplate#readme",
+  "dependencies": {
+    "@types/recharts": "^1.8.16"
+  }
+}
