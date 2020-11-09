@@ -50,11 +50,8 @@ import {
   TransactionQueryPayload,
   DefaultPrivacyLevel,
   Event,
-  weeklyRetentionObject,
-  eventData,
-  eventName,
+  weeklyRetentionObject
 } from "../../client/src/models";
-
 import Fuse from "fuse.js";
 import {
   isPayment,
@@ -73,7 +70,7 @@ import {
   isCommentNotification,
 } from "../../client/src/utils/transactionUtils";
 import { DbSchema } from "../../client/src/models/db-schema";
-import { OneWeek, OneDay, OneHour } from "./timeFrames";
+
 
 export type TDatabase = {
   users: User[];
@@ -102,223 +99,14 @@ const adapter = new FileSync<DbSchema>(databaseFile);
 
 const db = low(adapter);
 
-export const getAllEventsButOneByDateLimit = (
-  bottomLimit: number,
-  topLimit: number,
-  key: keyof Event,
-  value: any
-) =>
-  db
-    .get("events")
-    .filter((event: Event) => event.date > bottomLimit && event.date < topLimit)
-    .filter((event: Event) => event[key] !== `${value}`)
-    .value();
-
-export const getSpecificEventsByDateLimit = (
-  bottomLimit: number,
-  topLimit: number,
-  key: string,
-  value: any
-) =>
-  db
-    .get("events")
-    .filter((event: Event) => event.date > bottomLimit && event.date < topLimit)
-    .filter({ [`${key}`]: value })
-    .value();
-
-export const getEventsByDateLimitGroupedBySessions = (bottomLimit: number, topLimit: number) =>
-  db
-    .get("events")
-    .filter((event: Event) => event.date > bottomLimit && event.date < topLimit)
-    .groupBy("session_id")
-    .value();
-
 export const seedDatabase = () => {
   const testSeed = JSON.parse(
-    fs.readFileSync(path.join(process.cwd(), "data", "database.json"), "utf-8")
+    fs.readFileSync(path.join(process.cwd(), "data", "database-seed.json"), "utf-8")
   );
 
   // seed database with test data
   db.setState(testSeed).write();
   return;
-};
-
-export const getRetentionCohort = (dayZeroNumber: number): weeklyRetentionObject[] => {
-  const dayZero: number = new Date(new Date(dayZeroNumber).toUTCString()).getTime();
-
-  const signups: Event[] = db
-    .get("events")
-    .filter((event: Event) => event.name === "signup")
-    .orderBy("date")
-    .value();
-  const logins: Event[] = db
-    .get("events")
-    .filter({ ["name"]: "login" })
-    .orderBy("date")
-    .value();
-
-  const weekEnds: number[] = [];
-  // stores the end time of every week since dayZero
-
-  for (
-    let d = new Date(new Date(dayZero - 2 * OneHour).toDateString()).getTime();
-    d < new Date(new Date().toDateString()).getTime() + OneWeek;
-    d += OneWeek + 2 * OneHour
-  ) {
-    weekEnds.push(new Date(new Date(d).toDateString()).getTime() + OneWeek - 1);
-  }
-
-  const weeklyRetention: weeklyRetentionObject[] = weekEnds.map((weekEnd, weekNumber) => {
-    //first isolate the new Users the week
-
-    let weeksNewSignups = signups.filter((signup: Event) => signup.date <= weekEnd);
-    signups.splice(0, weeksNewSignups.length);
-
-    //second isolate the logins of users who started this week
-    const loginsByNewUsers = logins.filter(({ distinct_user_id: loginId }) => {
-      return weeksNewSignups.some(({ distinct_user_id: signupId }) => loginId === signupId);
-    });
-
-    const weeklyRetention: number[] = [];
-
-    //third for every following week we must find how many of the new Users came back
-    for (let i = weekNumber; i < weekEnds.length; i++) {
-      const returnedUsers: { id: string; date: string }[] = [];
-
-      let weeksLogins = loginsByNewUsers.filter((login: Event) => login.date <= weekEnds[i]);
-      loginsByNewUsers.splice(0, weeksLogins.length);
-
-      weeksLogins.forEach(({ distinct_user_id, date }) => {
-        if (!returnedUsers.some((user) => user.id === distinct_user_id)) {
-          returnedUsers.push({ id: distinct_user_id, date: new Date(date).toDateString() });
-        }
-      });
-      if ((weekNumber === 0 && i === 1) || (weekNumber === 4 && i === 5)) {
-        console.log("week" + weekNumber, returnedUsers);
-      }
-      weeklyRetention.push(returnedUsers.length);
-    }
-
-    const newUsers = weeksNewSignups.length;
-    const weeklyRetentionPercent = [100].concat(
-      newUsers
-        ? weeklyRetention
-            .slice(1)
-            .map((returnedUsers) => Math.round((100 * returnedUsers) / newUsers))
-        : weeklyRetention.slice(1)
-    );
-    return {
-      registrationWeek: weekNumber,
-      start: new Date(dayZero + weekNumber * OneWeek).toDateString().slice(4),
-      end: new Date(weekEnds[weekNumber] - 1).toDateString().slice(4),
-      newUsers: newUsers,
-      weeklyRetention: weeklyRetentionPercent,
-    };
-  });
-
-  return weeklyRetention;
-};
-
-export const getAllEvents = ({
-  sorting,
-  type,
-  browser,
-  search,
-  offset,
-}: {
-  sorting?: string;
-  type?: eventName;
-  browser?: string;
-  search?: string;
-  offset?: number;
-}): Event[] | { events: Event[]; more: boolean } => {
-  if (!sorting) {
-    sorting = "-date";
-  }
-  let sort = sorting.slice(1);
-  let direction = sorting.slice(0, 1);
-  let events = db
-    .get("events")
-    .filter((event) => {
-      const fitsType = type ? event.name === type : true;
-      const fitsBrowser = browser ? event.browser === browser : true;
-      let fitsSearch: boolean = search ? false : true;
-      if (search) {
-        const regex = new RegExp(search);
-        fitsSearch = Object.keys(event).some((key) => regex.test(event[key].toString()));
-      }
-      return fitsBrowser && fitsSearch && fitsType;
-    })
-    .orderBy(sort, direction === "-" ? "desc" : "asc")
-    .value();
-  return offset
-    ? {
-        events: events.slice(0, offset),
-        more: events.slice(0, offset).length !== events.length,
-      }
-    : events;
-};
-
-export const createEvent = (eventData: any) => {
-  db.get(EVENT_TABLE).push(eventData).write();
-};
-
-const backToMidnight = (time: number): number => {
-  return new Date(new Date(time).toDateString()).getTime();
-};
-const nextDay = (time: number): number => {
-  return new Date(new Date(time + OneDay + 2 * OneHour).toDateString()).getTime();
-};
-
-const dateString = (time: number): string => {
-  const splitDate = new Date(time).toDateString().slice(4).split(" ");
-  const [month, day, year] = splitDate;
-  return [day, month, year].join(" / ");
-};
-
-export const getSessionsByDay = (offset = 0): { date: string; count: number }[] => {
-  const days: number[] = new Array(offset || 7).fill(1).map((day, i) => {
-    return backToMidnight(Date.now() - i * OneDay - offset * OneDay);
-  });
-  const events = db.get(EVENT_TABLE).orderBy("date", "asc");
-
-  let sessionsByDays = days.map((day) => {
-    return {
-      date: dateString(day),
-      count: events
-        .filter((event) => event.date > day)
-        .filter((event) => event.date < nextDay(day))
-        .uniqBy("session_id")
-        .value().length,
-    };
-  });
-
-  return sessionsByDays.reverse();
-};
-
-export const getSessionsByHour = (offset = 0): { hour: string; count: number }[] => {
-  let midnight: number = backToMidnight(Date.now() - offset * OneDay);
-  let tomorrow: number = backToMidnight(midnight + 25 * OneHour);
-
-  let sessionsToday: Event[] = db
-    .get("events")
-    .filter((event) => {
-      return event.date >= midnight && event.date < tomorrow;
-    })
-    .uniqBy("session_id")
-    .value();
-  const sessionsByHour: { hour: string; count: number }[] = [];
-
-  for (let hour = tomorrow - OneHour; hour >= midnight; hour -= OneHour) {
-    const hourString: number = new Date(hour).getHours();
-    const firstSession: number = sessionsToday.findIndex(({ date }) => date > hour);
-    const count: number = sessionsToday.splice(firstSession).length;
-    sessionsByHour.push({
-      hour: hourString + ":00",
-      count,
-    });
-  }
-  return sessionsByHour;
 };
 
 export const getAllUsers = () => db.get(USER_TABLE).value();
@@ -1075,5 +863,346 @@ export const getTransactionsBy = (key: string, value: string) =>
 
 /* istanbul ignore next */
 export const getTransactionsByUserId = (userId: string) => getTransactionsBy("receiverId", userId);
+
+// Event
+export const getAllEvents = () => db.get(EVENT_TABLE).value();
+
+export const getEventBy = (key: string, value: any) => getBy(EVENT_TABLE, key, value);
+// export const getEventId = (event: Event): string => event.id;
+export const getEventById = (id: string): Event => getEventBy("id", id);
+
+export const getEventsBy = (key: string, value: any) => getAllBy(EVENT_TABLE, key, value);
+
+export const getEventsByUserId = (userId: string): Event[] => getEventsBy("userId", userId);
+
+export const getRetentionCohort = (dayZeroNumber:number):weeklyRetentionObject[] => {
+  
+  const dayZero:number = new Date(new Date(dayZeroNumber).toUTCString()).getTime()
+  
+  const signups:Event[] = db
+  .get('events')
+  .filter(
+    (event: Event) => event.name === "signup"
+  )
+  .orderBy('date')
+  .value()
+  const logins : Event[] = db
+  .get('events')
+  .filter({ ['name']: 'login' })
+  .orderBy('date')
+  .value()
+
+  const weekEnds:number[] = []
+  // stores the end time of every week since dayZero
+  
+  for(
+      let d = new Date(new Date(dayZero-2*OneHour).toDateString()).getTime() ;
+      d < new Date(new Date().toDateString()).getTime()+OneWeek ;
+      d+=OneWeek+2*OneHour
+    ){ 
+    weekEnds.push(new Date(new Date(d).toDateString()).getTime()+OneWeek-1)
+  }
+  
+  const weeklyRetention:weeklyRetentionObject[] = weekEnds.map((weekEnd,weekNumber) => {
+    //first isolate the new Users the week
+    
+    let weeksNewSignups = signups.filter((signup:Event) => signup.date <= weekEnd)
+    signups.splice(0, weeksNewSignups.length);
+    
+    //second isolate the logins of users who started this week
+    const loginsByNewUsers = logins
+    .filter(({ distinct_user_id : loginId })=>{
+      return weeksNewSignups.some(({distinct_user_id:signupId})=>loginId===signupId)
+    })
+    
+    const weeklyRetention:number[] = []
+    
+    //third for every following week we must find how many of the new Users came back 
+    for(let i=weekNumber;i<weekEnds.length;i++){
+      
+      const returnedUsers : {id:string,date:string}[] = []
+      
+      let weeksLogins = loginsByNewUsers.filter((login:Event) => login.date <= weekEnds[i])
+      loginsByNewUsers.splice(0, weeksLogins.length);
+      
+      weeksLogins.forEach(({distinct_user_id,date})=>{
+        if(!returnedUsers.some(user=>user.id===distinct_user_id)){
+          returnedUsers.push({id:distinct_user_id,date:new Date (date).toDateString()})
+        }
+      })
+      if(weekNumber === 0 && i === 1 || weekNumber === 4 && i === 5){
+      console.log('week'+weekNumber,returnedUsers)
+      }
+      weeklyRetention.push(returnedUsers.length)
+    } 
+    
+    const newUsers = weeksNewSignups.length
+    const weeklyRetentionPercent= [100].concat(
+      newUsers
+      ?weeklyRetention.slice(1).map(returnedUsers=>Math.round(100*returnedUsers/newUsers))
+      :weeklyRetention.slice(1)
+      )
+      return {
+        registrationWeek: weekNumber,
+      start:new Date( dayZero + weekNumber * OneWeek ).toDateString().slice(4),
+      end:(new Date( weekEnds[weekNumber]-1)).toDateString().slice(4),
+      newUsers:newUsers,      
+      weeklyRetention:weeklyRetentionPercent
+    }
+  })
+
+  return  weeklyRetention 
+}
+
+interface day {
+  date: string;
+  count: number;
+}
+
+interface hour {
+  hour: string;
+  count: number;
+}
+
+export const dayZero:number = 1601499600000
+const OneHour: number = 1000 * 60 * 60; 
+const OneDay: number = OneHour * 24
+const OneWeek: number = OneDay*7
+
+function generateWeekObject(offset: number): { [day: string]: Event[] } {
+  let day: number = Date.now() - (offset + 6) * OneDay;
+
+  const week: { [day: string]: [] } = {};
+
+  for (let i = 0; i < 7; i++) {
+    const date = new Date(day + OneDay * i);
+    const key = `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
+    week[key] = [];
+  }
+  return week;
+}
+
+function generateDayObject(): { [day: string]: Event[] } {
+  return {
+    "00:00": [],
+    "01:00": [],
+    "02:00": [],
+    "03:00": [],
+    "04:00": [],
+    "05:00": [],
+    "06:00": [],
+    "07:00": [],
+    "08:00": [],
+    "09:00": [],
+    "10:00": [],
+    "11:00": [],
+    "12:00": [],
+    "13:00": [],
+    "14:00": [],
+    "15:00": [],
+    "16:00": [],
+    "17:00": [],
+    "18:00": [],
+    "19:00": [],
+    "20:00": [],
+    "21:00": [],
+    "22:00": [],
+    "23:00": [],
+  };
+}
+
+export const getLastWeekEventsCount = (offset: number) => {
+  const Days: number = OneDay * 6; //518400000
+  const Offset: number= OneDay * offset;
+  const dateInMili: number = new Date(new Date().toDateString()).getTime();
+  const dayLimit: number = dateInMili - Days - Offset;
+  const groupByDates = db
+    .get(EVENT_TABLE)
+    .filter((event: Event) => event.date > dayLimit && event.date < dateInMili - Offset + OneDay)
+    .sort((e1: Event, e2: Event) => e1.date - e2.date)
+    .groupBy((event:Event) => {
+      const date = new Date(event.date);
+      return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
+    })
+    .value();
+
+  const weekDays = generateWeekObject(offset);
+
+  for (let day in weekDays) {
+    weekDays[day] = groupByDates[day] ? groupByDates[day] : [];
+  }
+
+  let arrResult = Object.keys(weekDays).map((day: string) => {
+    const count = countBy((e: Event) => {
+      const date: Date = new Date(e.date);
+      return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
+    }, uniqBy("session_id", weekDays[day]));
+    return count;
+  });
+
+  arrResult = arrResult.map((day, index: number) => {
+    if (Object.keys(day).length === 0) {
+      const date: string = Object.keys(weekDays)[index];
+      arrResult[index][date] = 0;
+    }
+    return arrResult[index];
+  });
+
+  const objResult: day[] = [];
+  arrResult.forEach((e) => {
+    const temp: day = { date: "", count: 0 };
+    temp.date = Object.keys(e)[0];
+    temp.count = e[Object.keys(e)[0]];
+    objResult.push(temp);
+  });
+
+  return objResult;
+};
+
+export const getLastDayEventsCount = ( offset: number) => {
+
+  const Offset: number = OneDay * (offset - 1);
+  const dateInMili: number = new Date(new Date(Date.now()).toDateString()).getTime();
+  const dayLimit: number = dateInMili - Offset - OneDay;
+  console.log(new Date(dayLimit))
+  console.log(new Date(dateInMili - Offset))
+  const groupByHours = db
+    .get(EVENT_TABLE)
+    .filter(
+      (event: Event) =>
+        event.date > dayLimit && event.date < dateInMili - Offset
+    )
+    .sort((e1: Event, e2: Event) => e1.date - e2.date)
+    .groupBy((event:Event) => {
+      const time = new Date(event.date);
+      return time.getHours() > 9 ? `${time.getHours()}:00` : `0${time.getHours()}:00`;
+    })
+    .value();
+
+  const dayHours = generateDayObject()
+  
+  for(let hour in dayHours ){
+    dayHours[hour] = groupByHours[hour] ? groupByHours[hour] : []
+  }
+
+  let arrResult = Object.keys(dayHours).map((key: string) => {
+    const count = countBy((e: Event) => {
+      const time = new Date(e.date);
+      return time.getHours() > 9 ? `${time.getHours()}:00` : `0${time.getHours()}:00`;
+    }, uniqBy("session_id", dayHours[key]));
+    return count;
+  });
+
+  arrResult = arrResult.map((day, index: number) => {
+    if (Object.keys(day).length === 0) {
+      const date: string = Object.keys(dayHours)[index];
+      arrResult[index][date] = 0;
+    }
+    return arrResult[index];
+  });
+
+  const objResult: hour[] = [];
+  arrResult.forEach((e) => {
+    const temp: hour = { hour: "", count: 0 };
+    temp.hour = Object.keys(e)[0];
+    temp.count = e[Object.keys(e)[0]];
+    objResult.push(temp);
+  });
+
+  return objResult
+}
+
+export const getTodaysEvents = ():Event[] => {
+  const todaysEvents = db
+    .get(EVENT_TABLE)
+    .filter((event: Event) => event.date > Date.now() - OneDay)
+    .sort((e1: Event, e2: Event) => e1.date - e2.date)
+    .value();
+
+  return todaysEvents
+}
+
+export const getWeeksEvents = ():Event[] => {
+
+  const todaysEvents = db
+    .get(EVENT_TABLE)
+    .filter((event: Event) => event.date > Date.now() - 7 * OneDay)
+    .sort((e1: Event, e2: Event) => e1.date - e2.date)
+    .uniqBy("session_id")
+    .value();
+
+  return todaysEvents;
+};
+
+export const getTimeByUserEachURL = (): any [] => {
+
+  const allUsers = getAllUsers();
+  console.log(allUsers);
+  let userURLdetails: 
+    {"userId": string, 
+    "username": string, 
+    "login": number, 
+    "signin": number, 
+    "admin": number, 
+    "home": number}[] = [];
+
+  allUsers.forEach(user => {
+    const userEvents = getEventsByUserId(user.id);
+
+    let counterTimeLogin = 0;
+    let counterTimeSignin = 0;
+    let counterTimeAdmin = 0;
+    let counterTimeHome = 0;
+
+    userEvents.forEach(event => {
+      if (event.url === "http://localhost3000/login") {
+        counterTimeLogin += event.date;      
+      } else if (event.url === "http://localhost3000/signup") {
+        counterTimeSignin += event.date;
+      } else if (event.url === "http://localhost3000/admin") {
+        counterTimeAdmin += event.date;
+      } else if (event.url === "http://localhost3000/") {
+        counterTimeHome += event.date;
+      }
+    })
+
+    userURLdetails.push({
+      "userId": user.id, 
+      "username": user.username, 
+      "login": counterTimeLogin / 1000, 
+      "signin": counterTimeSignin / 1000, 
+      "admin": counterTimeAdmin / 1000, 
+      "home": counterTimeHome / 1000
+    })
+
+  })
+
+    let counterLogin = 0;
+    let counterSignin = 0;
+    let counterAdmin = 0;
+    let counterHome = 0;
+
+    userURLdetails.forEach((user) => {
+        counterLogin +=  user.login;
+        counterSignin += user.signin;
+        counterAdmin += user.admin;
+        counterHome += user.home;
+    });
+
+    const data2 = [
+    	{ name: 'Login', value: Math.round((counterLogin / 60 / 60 + Number.EPSILON) * 100) / 100 },
+    	{ name: 'Signin', value: Math.round((counterSignin / 60 / 60 + Number.EPSILON) * 100) / 100 },
+    	{ name: 'Admin', value: Math.round((counterAdmin / 60 / 60  + Number.EPSILON) * 100) / 100 },
+    	{ name: 'Home', value: Math.round((counterHome / 60 / 60  + Number.EPSILON) * 100) / 100 }
+    ];
+
+  return [userURLdetails, data2];
+};
+
+
+export const createEvent = (event: Event) => {
+  db.get(EVENT_TABLE).push(event).write();
+};
+
 
 export default db;

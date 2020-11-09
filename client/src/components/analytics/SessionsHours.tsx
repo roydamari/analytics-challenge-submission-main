@@ -50,7 +50,7 @@ export default function SessionsHours() {
   useEffect(() => {
     (async function fetchData() {
       const { data } = await axios.get(`http://localhost:3001/events/by-hours/${offset - 1}`);
-      setChart(data.reverse());
+      setChart(data);
     })();
   }, [offset]);
 

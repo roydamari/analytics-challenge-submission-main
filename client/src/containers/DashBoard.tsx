@@ -1,8 +1,6 @@
 import React, { useEffect, useState } from "react";
-import styled from "styled-components";
 import ErrorBoundary from "./ErrorBoundary";
 import { Tile, TileContainer } from "./DashComponents";
-import axios from "axios";
 import {
   LogTile,
   Map,
